@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>AR Card Experience</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #000; font-family: sans-serif; }
+    #loading {
+      position: fixed; inset: 0; background: #0f172a;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      color: #fff; z-index: 9999; gap: 1rem;
+    }
+    #loading h2 { font-size: 1.4rem; font-weight: 700; }
+    #loading p { color: #94a3b8; font-size: 0.85rem; }
+    .spinner { width: 44px; height: 44px; border: 3px solid #1e293b;
+      border-top-color: #6366f1; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #scan-hint {
+      position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.7); color: #a5b4fc; padding: 8px 20px;
+      border-radius: 999px; font-size: 0.8rem; font-weight: 500;
+      pointer-events: none; z-index: 100; white-space: nowrap;
+      border: 1px solid rgba(99,102,241,0.4); transition: opacity 0.5s;
+    }
+    #scan-hint.hidden { opacity: 0; }
+  </style>
+</head>
+<body>
+<div id="loading">
+  <div class="spinner"></div>
+  <h2>AR Card Experience</h2>
+  <p>Initializing camera tracking...</p>
+</div>
+<div id="scan-hint">Point camera at the card to activate AR</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+const SCENE_OBJECTS = [{"id":"obj_1773508108204_2","type":"video","name":"Video 1","position":[0,0,0.09822625210241935],"rotation":[0,0,0],"scale":[0.8996967649257391,1.716738855320103,0.5],"opacity":1,"visible":true,"assetId":"obj_1773508106681_1","animation":"popup","interaction":"triggerAnimation","assetSrc":"assets/obj_1773508106681_1.mp4"}];
+
+const animFns = {
+  fadeIn: (mesh) => {
+    if (mesh.material) mesh.material.transparent = true;
+    let t = 0;
+    const fn = () => { t += 0.025; if (mesh.material) mesh.material.opacity = Math.min(t, mesh.userData.opacity||1); if(t<1) requestAnimationFrame(fn); };
+    fn();
+  },
+  popup: (mesh) => {
+    const base = mesh.userData.baseScale||[1,1,1]; mesh.scale.set(0.01,0.01,0.01); let t=0;
+    const fn = () => { t+=0.05; const s=t<1?(1.1-0.1*t)*t:1; mesh.scale.set(base[0]*s,base[1]*s,base[2]*s); if(t<1.2)requestAnimationFrame(fn); else mesh.scale.set(...base); };
+    fn();
+  },
+  float: (mesh) => { let t=0; const by=mesh.position.y; const fn=()=>{t+=0.02;mesh.position.y=by+Math.sin(t)*0.04;requestAnimationFrame(fn);}; fn(); },
+  rotate: (mesh) => { const fn=()=>{mesh.rotation.y+=0.025;requestAnimationFrame(fn);}; fn(); },
+  scaleBounce: (mesh) => {
+    const base=mesh.userData.baseScale||[1,1,1]; let t=0;
+    const fn=()=>{t+=0.06;const s=1+0.35*Math.abs(Math.sin(t*1.5))*Math.exp(-t*0.4);mesh.scale.set(base[0]*s,base[1]*s,base[2]*s);if(t<8)requestAnimationFrame(fn);};
+    fn();
+  },
+};
+
+async function init() {
+  const mindarThree = new window.MINDAR.IMAGE.MindARThree({
+    container: document.body, imageTargetSrc: "targets.mind",
+    maxTrack: 1, uiLoading: "no", uiScanning: "no", uiError: "no",
+  });
+
+  const { renderer, scene, camera } = mindarThree;
+  const anchor = mindarThree.addAnchor(0);
+  const videoElements = [];
+
+  for (const obj of SCENE_OBJECTS) {
+    const [px, py, pz] = obj.position, [rx, ry, rz] = obj.rotation, [sx, sy, sz] = obj.scale;
+    let mesh = null;
+
+    if (obj.type === "image" && obj.assetSrc) {
+      const tex = await new Promise(res => new THREE.TextureLoader().load(obj.assetSrc, res, undefined, () => res(null)));
+      if (tex) mesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:obj.opacity}));
+    } else if (obj.type === "video" && obj.assetSrc) {
+      const video = document.createElement("video");
+      video.src = obj.assetSrc; video.loop=true; video.muted=true; video.playsInline=true; video.crossOrigin="anonymous";
+      const tex = new THREE.VideoTexture(video);
+      mesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:obj.opacity}));
+      videoElements.push(video);
+    } else if (obj.type === "text" || obj.type === "button") {
+      const isBtn = obj.type === "button";
+      const cw=isBtn?256:512, ch=isBtn?80:128;
+      const cv = document.createElement("canvas"); cv.width=cw; cv.height=ch;
+      const ctx = cv.getContext("2d");
+      if (isBtn) { ctx.fillStyle=obj.backgroundColor||"#6366f1"; ctx.beginPath(); ctx.roundRect?ctx.roundRect(0,0,cw,ch,ch/2):ctx.rect(0,0,cw,ch); ctx.fill(); }
+      ctx.fillStyle=obj.color||"#ffffff"; ctx.font=`bold ${obj.fontSize||(isBtn?32:48)}px sans-serif`;
+      ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(obj.text||(isBtn?"Tap":"Text"),cw/2,ch/2);
+      mesh = new THREE.Mesh(new THREE.PlaneGeometry(isBtn?2:4,isBtn?0.6:1), new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cv),transparent:true,opacity:obj.opacity}));
+    }
+
+    if (mesh) {
+      mesh.userData.baseScale=[sx,sy,sz]; mesh.userData.opacity=obj.opacity;
+      mesh.position.set(px,py,pz); mesh.rotation.set(rx,ry,rz); mesh.scale.set(sx,sy,sz);
+      anchor.group.add(mesh);
+      if (obj.animation && animFns[obj.animation]) setTimeout(()=>animFns[obj.animation](mesh),300);
+      if (obj.interaction==="openLink"&&obj.interactionUrl) mesh.userData.link=obj.interactionUrl;
+    }
+  }
+
+  const raycaster=new THREE.Raycaster(), mouse=new THREE.Vector2();
+  renderer.domElement.addEventListener("click",(e)=>{
+    const rect=renderer.domElement.getBoundingClientRect();
+    mouse.x=((e.clientX-rect.left)/rect.width)*2-1; mouse.y=-((e.clientY-rect.top)/rect.height)*2+1;
+    raycaster.setFromCamera(mouse,camera);
+    const hits=raycaster.intersectObjects(anchor.group.children,true);
+    for(const hit of hits){ if(hit.object.userData.link){window.open(hit.object.userData.link,"_blank");break;} }
+  });
+
+  anchor.onTargetFound=()=>{ videoElements.forEach(v=>v.play().catch(()=>{})); document.getElementById("scan-hint").classList.add("hidden"); };
+  anchor.onTargetLost=()=>{ videoElements.forEach(v=>v.pause()); document.getElementById("scan-hint").classList.remove("hidden"); };
+
+  await mindarThree.start();
+  document.getElementById("loading").style.display="none";
+  renderer.setAnimationLoop(()=>renderer.render(scene,camera));
+}
+
+init().catch((err)=>{
+  document.getElementById("loading").innerHTML=`<h2 style="color:#f87171">AR Failed</h2><p style="color:#94a3b8">${err.message}</p>`;
+});
+</script>
+</body>
+</html>
